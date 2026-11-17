@@ -18,12 +18,15 @@ POST /v1/remove   ->  multipart image in, transparent PNG out
 ~1.5 GB of disk and ~1.5 GB of resident RAM. Shared plans cannot install torch
 and will kill the process on memory limits. You need a **Hostinger VPS**:
 
-| Plan | vCPU | RAM | Verdict |
+| Plan | vCPU | RAM | Measured inference |
 |---|---|---|---|
 | Shared / Business / Cloud hosting | – | – | Will not work |
-| VPS KVM 1 | 1 | 4 GB | Works, ~3–6 s per image. Tight; enable swap. |
-| **VPS KVM 2** | **2** | **8 GB** | **Recommended minimum.** ~1.5–3 s per image. |
-| VPS KVM 4 | 4 | 16 GB | ~1–1.5 s per image, comfortable headroom. |
+| VPS KVM 1 | 1 | 4 GB | **3.6 s** per image. Tight; enable swap. |
+| **VPS KVM 2** | **2** | **8 GB** | **2.1 s** per image. Recommended minimum. |
+| VPS KVM 4 | 4 | 16 GB | **1.2 s** per image, comfortable headroom. |
+
+Those are real measurements of `briaai/RMBG-1.4` on CPU at `RMBG_TORCH_THREADS`
+= 1 / 2 / 4, not estimates.
 
 <details>
 <summary><strong>If you only have Hostinger shared hosting</strong> (click to expand)</summary>
@@ -485,16 +488,42 @@ pass `--overwrite`, and reports per-image timings.
 
 ---
 
+## Performance
+
+Measured on CPU with the real weights, `RMBG_TORCH_THREADS=2` (a KVM 2 VPS):
+
+| Input | Total | decode | **inference** | encode | Output PNG |
+|---|---|---|---|---|---|
+| 640×480 | 2.19 s | 1 ms | **2107 ms** | 79 ms | 253 KB |
+| 1920×1440 | 2.46 s | 7 ms | **2036 ms** | 407 ms | 1.2 MB |
+| 3000×2250 | 2.86 s | 19 ms | **2087 ms** | 728 ms | 2.2 MB |
+| 4096×3072 | 3.66 s | 52 ms | **2463 ms** | 1097 ms | 3.2 MB |
+
+**Inference cost does not depend on your image size.** The network always runs
+at 1024×1024, so a 12 MP photo costs the same forward pass as a thumbnail —
+only decoding and PNG encoding grow. Two consequences:
+
+* Sending bigger images is nearly free. Don't downscale on the client hoping
+  to save server time; you will only lose detail in the matte.
+* If a request feels slow, the fix is more CPU (`RMBG_TORCH_THREADS`), not
+  smaller inputs. The one real lever on output size is `output_format=webp`,
+  which cut a 253 KB PNG to 6 KB in these runs.
+
+Model load from a warm local cache is ~0.6 s and warmup ~1.4 s, so a container
+is serving within a couple of seconds of start.
+
+---
+
 ## Operations
 
 ### Tuning
 
 | Symptom | Change |
 |---|---|
-| Slow single requests | Raise `RMBG_TORCH_THREADS` to your vCPU count |
+| Slow single requests | Raise `RMBG_TORCH_THREADS` to your vCPU count — the only real lever |
 | 503 `overloaded` under load | Raise `RMBG_MAX_QUEUED_REQUESTS`, or add a replica |
 | Memory pressure | Lower `RMBG_MAX_INPUT_DIMENSION` (2048 is plenty for web) |
-| Output too large | `output_format=webp`, or set `max_output_dimension` |
+| Output too large | `output_format=webp` — 40× smaller than PNG in testing |
 | Halo around hair | `edge_contrast=3`, or `feather=1` |
 
 Leave `RMBG_INFERENCE_WORKERS=1` and gunicorn at one worker unless you have
