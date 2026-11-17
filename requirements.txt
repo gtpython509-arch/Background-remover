@@ -1,0 +1,34 @@
+# Core runtime, fully pinned - a floating version here is how a working deploy
+# breaks on the next rebuild.
+#
+# Just run:  pip install -r requirements.txt
+# No extra flags needed. The index line below is what makes that work.
+
+# On Linux, PyPI's plain `torch` wheel is the CUDA build and drags in ~2.5 GB of
+# nvidia-* packages we never use. The `+cpu` local version exists only on
+# PyTorch's own CPU index, so pinning it guarantees the ~195 MB CPU wheel.
+# macOS and Windows wheels on PyPI are already CPU/MPS builds, so they take the
+# plain pin.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu ; sys_platform == "linux"
+torch==2.5.1 ; sys_platform != "linux"
+
+# --- web layer ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+gunicorn==23.0.0 ; sys_platform != "win32"
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.0
+httpx==0.28.1
+
+# --- model layer ---
+transformers==4.45.2
+huggingface-hub==0.26.5
+safetensors==0.4.5
+# numpy 1.26.x has no cp313 wheel and would compile from source on 3.13, so
+# newer interpreters take the 2.x line. torch 2.5 and transformers 4.45 both
+# support numpy 2.
+numpy==1.26.4 ; python_version < "3.13"
+numpy==2.1.3 ; python_version >= "3.13"
+pillow==11.0.0

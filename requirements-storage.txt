@@ -1,0 +1,3 @@
+# Only needed when RMBG_STORAGE_ENABLED=true (Backblaze B2, S3, R2, MinIO...).
+-r requirements.txt
+boto3==1.35.81

@@ -1,0 +1,58 @@
+# Run from the project root:
+#   docker compose -f deploy/docker-compose.yml up -d --build
+name: rmbg
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: rmbg-service:1.0.0
+    container_name: rmbg-api
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      RMBG_HOST: 0.0.0.0
+      RMBG_PORT: "8000"
+      RMBG_LOCAL_FILES_ONLY: "true"
+      RMBG_TRUSTED_PROXY_COUNT: "1"
+    ports:
+      # Loopback only. nginx on the host terminates TLS and proxies in.
+      - "127.0.0.1:8000:8000"
+    # NO volume on /var/lib/rmbg. The weights are baked into the image by the
+    # Dockerfile, and a named volume mounted there would shadow them - Docker
+    # seeds a volume from the image only the FIRST time, so after an upgrade
+    # the container would start on stale weights, or fail outright because
+    # RMBG_LOCAL_FILES_ONLY=true forbids re-downloading.
+    #
+    # If you comment out the `download_model.py` step in the Dockerfile to keep
+    # the image small, uncomment this and set RMBG_LOCAL_FILES_ONLY=false so the
+    # first start can populate the cache:
+    # volumes:
+    #   - model-cache:/var/lib/rmbg
+    deploy:
+      resources:
+        limits:
+          # Headroom for one model copy plus a 4096px image in flight.
+          memory: 3g
+        reservations:
+          memory: 1500m
+    # The model needs a few seconds to shut down cleanly.
+    stop_grace_period: 45s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 150s
+
+# volumes:
+#   model-cache:

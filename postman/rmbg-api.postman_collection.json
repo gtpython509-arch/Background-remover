@@ -1,0 +1,773 @@
+{
+  "info": {
+    "_postman_id": "9f2c1b7e-4d3a-4e55-9a21-rmbg00000001",
+    "name": "RMBG Background Removal API",
+    "description": "Background removal service (RMBG-1.4).\n\n## Setup\n1. Start the server: `make dev` (listens on http://127.0.0.1:8000).\n2. Set the `baseUrl` collection variable if you use a different host.\n3. Leave `apiKey` EMPTY while `RMBG_API_KEYS` is unset - auth is off and the empty header is ignored. Once you set keys on the server, paste one into `apiKey` and every request picks it up.\n\n## Order to try\n`Health` -> `Readiness` -> `Service info`, then `Remove background (PNG)`. Binary responses render in Postman's preview pane; use **Save Response -> Save to a file** to keep the PNG.\n\nThe `Error cases` folder is there to show the JSON error envelope: every failure returns `{\"error\": {\"code\", \"message\", \"request_id\"}}`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{apiKey}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000",
+      "type": "string",
+      "description": "No trailing slash."
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "type": "string",
+      "description": "Leave empty unless RMBG_API_KEYS is set on the server."
+    }
+  ],
+  "item": [
+    {
+      "name": "Ops",
+      "description": "Unauthenticated probes. Safe to poll.",
+      "item": [
+        {
+          "name": "Health (liveness)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/healthz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "healthz"
+              ]
+            },
+            "description": "200 while the process is alive. Does not touch the model."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('reports ok', function () {",
+                  "    pm.expect(pm.response.json().status).to.eql('ok');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/readyz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readyz"
+              ]
+            },
+            "description": "200 once the model is loaded; 503 while it is still loading. Expect 503 for the first ~60s after a cold start - that is correct."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 503', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 503]);",
+                  "});",
+                  "const b = pm.response.json();",
+                  "console.log('model_loaded:', b.model_loaded, '| in_flight:', b.in_flight, '/', b.capacity);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Service info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/info",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "info"
+              ]
+            },
+            "description": "Model, device, limits, and which features are enabled. Check `auth_required` here to see whether you need an API key."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const b = pm.response.json();",
+                  "pm.test('exposes limits', function () {",
+                  "    pm.expect(b).to.have.property('max_upload_bytes');",
+                  "});",
+                  "console.log('auth_required:', b.auth_required, '| device:', b.device);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Metrics (Prometheus)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "metrics"
+              ]
+            },
+            "description": "Prometheus text format. nginx.conf restricts this to localhost in production, so it may 403 through a deployed host."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or blocked by proxy', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 403, 404]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Background removal",
+      "item": [
+        {
+          "name": "Remove background (PNG)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "description": "REQUIRED. Click 'Select Files' and pick a PNG/JPEG/WebP from your disk.",
+                  "src": []
+                },
+                {
+                  "key": "output_format",
+                  "type": "text",
+                  "description": "png | webp | jpeg | mask",
+                  "value": "png"
+                },
+                {
+                  "key": "background",
+                  "type": "text",
+                  "description": "Hex or CSS colour behind the subject",
+                  "value": "#ffffff",
+                  "disabled": true
+                },
+                {
+                  "key": "feather",
+                  "type": "text",
+                  "description": "Gaussian edge softening in px, 0-25",
+                  "value": "1",
+                  "disabled": true
+                },
+                {
+                  "key": "threshold",
+                  "type": "text",
+                  "description": "Hard-cut alpha to binary, 0-1",
+                  "value": "0.5",
+                  "disabled": true
+                },
+                {
+                  "key": "edge_contrast",
+                  "type": "text",
+                  "description": "Reduce halo on hair, 0-10",
+                  "value": "3",
+                  "disabled": true
+                },
+                {
+                  "key": "max_output_dimension",
+                  "type": "text",
+                  "description": "Downscale result's longest edge",
+                  "value": "1024",
+                  "disabled": true
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/remove",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "remove"
+              ]
+            },
+            "description": "The main endpoint. Returns raw image bytes, not JSON.\n\nPick a file in the Body tab, then Send. Response headers carry `X-Inference-Ms`, `X-Image-Width`/`-Height` and `X-Request-ID`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('returns an image', function () {",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('image/');",
+                  "});",
+                  "console.log('inference ms:', pm.response.headers.get('X-Inference-Ms'));",
+                  "console.log('bytes:', pm.response.responseSize);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Remove background (JPEG on white)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "description": "REQUIRED. Click 'Select Files' and pick a PNG/JPEG/WebP from your disk.",
+                  "src": []
+                },
+                {
+                  "key": "output_format",
+                  "type": "text",
+                  "description": "",
+                  "value": "jpeg"
+                },
+                {
+                  "key": "background",
+                  "type": "text",
+                  "description": "Required for jpeg - JPEG has no alpha channel",
+                  "value": "#ffffff"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/remove",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "remove"
+              ]
+            },
+            "description": "Flattens the cutout onto a solid colour. Much smaller than PNG; use this when the final background is known."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('is jpeg', function () {",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.eql('image/jpeg');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get the mask only",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "description": "REQUIRED. Click 'Select Files' and pick a PNG/JPEG/WebP from your disk.",
+                  "src": []
+                },
+                {
+                  "key": "output_format",
+                  "type": "text",
+                  "description": "",
+                  "value": "mask"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/remove",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "remove"
+              ]
+            },
+            "description": "Returns the 8-bit grayscale alpha matte as PNG. Useful when you composite on the client side."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Remove background (JSON + base64)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "description": "REQUIRED. Click 'Select Files' and pick a PNG/JPEG/WebP from your disk.",
+                  "src": []
+                },
+                {
+                  "key": "output_format",
+                  "type": "text",
+                  "description": "",
+                  "value": "png"
+                },
+                {
+                  "key": "include_base64",
+                  "type": "text",
+                  "description": "false to get only metadata and the storage URL",
+                  "value": "true"
+                },
+                {
+                  "key": "upload",
+                  "type": "text",
+                  "description": "true requires RMBG_STORAGE_ENABLED on the server",
+                  "value": "false",
+                  "disabled": true
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/remove/json",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "remove",
+                "json"
+              ]
+            },
+            "description": "Same processing, JSON response: base64 image, dimensions, source format, whether the input was downscaled, and per-stage timings."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const b = pm.response.json();",
+                  "pm.test('has base64 and meta', function () {",
+                  "    pm.expect(b.image_base64).to.be.a('string');",
+                  "    pm.expect(b.meta).to.have.property('width');",
+                  "});",
+                  "console.log('timings_ms:', JSON.stringify(b.timings_ms));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Batch (up to 10 files)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "description": "Select MULTIPLE files here (max 10)",
+                  "src": []
+                },
+                {
+                  "key": "output_format",
+                  "type": "text",
+                  "description": "",
+                  "value": "webp"
+                },
+                {
+                  "key": "include_base64",
+                  "type": "text",
+                  "description": "true embeds every result - responses get large",
+                  "value": "false"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/remove/batch",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "remove",
+                "batch"
+              ]
+            },
+            "description": "One bad file fails only its own entry; the rest still succeed. Each image costs one rate-limit token."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const b = pm.response.json();",
+                  "pm.test('reports per-file results', function () {",
+                  "    pm.expect(b.results).to.be.an('array');",
+                  "});",
+                  "console.log(b.succeeded + '/' + b.count + ' succeeded');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Remove background from a URL",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"image_url\": \"https://example.com/photo.jpg\",\n  \"output_format\": \"png\",\n  \"edge_contrast\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/remove/url",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "remove",
+                "url"
+              ]
+            },
+            "description": "Disabled by default - returns 403 unless `RMBG_ALLOW_REMOTE_FETCH=true`. When enabled, private, loopback and link-local addresses are refused and every redirect is re-validated (SSRF protection)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 when disabled, 200 when enabled', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 403]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Error cases",
+      "description": "Each one shows the shared error envelope and its `code`.",
+      "item": [
+        {
+          "name": "415 - not an image",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "description": "Pick any .txt or .pdf file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/remove",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "remove"
+              ]
+            },
+            "description": "Expect 415 `unsupported_media_type`. The magic bytes are what the server trusts, not the filename or the declared type."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 415', function () {",
+                  "    pm.response.to.have.status(415);",
+                  "});",
+                  "pm.test('code is unsupported_media_type', function () {",
+                  "    pm.expect(pm.response.json().error.code).to.eql('unsupported_media_type');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 - invalid option",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "description": "REQUIRED. Click 'Select Files' and pick a PNG/JPEG/WebP from your disk.",
+                  "src": []
+                },
+                {
+                  "key": "background",
+                  "type": "text",
+                  "description": "",
+                  "value": "octarine"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/remove",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "remove"
+              ]
+            },
+            "description": "Expect 400 `invalid_options` - the colour cannot be parsed."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test('code is invalid_options', function () {",
+                  "    pm.expect(pm.response.json().error.code).to.eql('invalid_options');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "422 - missing file",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "output_format",
+                  "type": "text",
+                  "description": "",
+                  "value": "png"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/remove",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "remove"
+              ]
+            },
+            "description": "Expect 422 `validation_error`, with a `detail` array naming the missing field."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 422', function () {",
+                  "    pm.response.to.have.status(422);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 - bad API key (only when auth is on)",
+          "request": {
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "X-API-Key",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "definitely-wrong",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "description": "REQUIRED. Click 'Select Files' and pick a PNG/JPEG/WebP from your disk.",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/remove",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "remove"
+              ]
+            },
+            "description": "Overrides the collection auth with a wrong key.\n\nWith `RMBG_API_KEYS` unset the server has auth disabled, so this returns 200 - that is expected. Set keys on the server and it returns 401 `unauthorized`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 when auth on, 200 when off', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 401]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

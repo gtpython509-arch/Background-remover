@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------------------
+# systemd unit for running WITHOUT Docker (venv directly on the VPS).
+#   sudo cp deploy/rmbg.service /etc/systemd/system/rmbg.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now rmbg
+#   sudo journalctl -u rmbg -f
+# If you use docker compose instead, you do not need this file.
+# ---------------------------------------------------------------------------
+[Unit]
+Description=RMBG Background Removal API
+Documentation=https://github.com/yourname/rmbg-service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=rmbg
+Group=rmbg
+WorkingDirectory=/srv/rmbg-service
+EnvironmentFile=/srv/rmbg-service/.env
+Environment="PATH=/srv/rmbg-service/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HF_HOME=/var/lib/rmbg/hf"
+Environment="HF_HUB_DISABLE_TELEMETRY=1"
+ExecStart=/srv/rmbg-service/.venv/bin/gunicorn app.main:app -c deploy/gunicorn.conf.py
+ExecReload=/bin/kill -s HUP $MAINPID
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStartSec=300
+TimeoutStopSec=60
+Restart=always
+RestartSec=10
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/rmbg
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryMax=3G
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rmbg
+
+[Install]
+WantedBy=multi-user.target
